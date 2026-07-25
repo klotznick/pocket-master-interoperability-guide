@@ -35,10 +35,22 @@ GLOBAL_TAG_NAMES = {
 }
 GLOBAL_SETTINGS_REQUEST_DATA = bytes.fromhex("0B 09 00 01 00 00 00 02 01 02 01 00")
 GLOBAL_SETTINGS_REQUEST_RAW = bytes([0xF0]) + GLOBAL_SETTINGS_REQUEST_DATA + bytes([0xF7])
+MIDI_POST_OPEN_SETTLE_SECONDS = 0.15
+MIDI_RETRY_COOLDOWN_SECONDS = 10.0
 
 
 class ExampleError(RuntimeError):
     """A concise, user-facing failure."""
+
+
+def positive_finite_seconds(value: str | float) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("timeout must be a number") from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout must be finite and greater than zero")
+    return seconds
 
 
 def require_mido() -> Any:
@@ -220,6 +232,11 @@ def reassemble_settings_fragments(fragments: dict[int, bytes]) -> bytes:
 
 
 def read_settings(args: argparse.Namespace) -> None:
+    try:
+        timeout = positive_finite_seconds(args.timeout)
+    except argparse.ArgumentTypeError as error:
+        raise ExampleError(str(error)) from error
+
     print("Risk: Device read — sends one settings request and no state-changing command.")
     print(f"Input:  {args.input}")
     print(f"Output: {args.out}")
@@ -231,20 +248,40 @@ def read_settings(args: argparse.Namespace) -> None:
 
     mido = require_mido()
     fragments: dict[int, bytes] = {}
-    print("Opening the input before sending the read-only request...")
-    with mido.open_input(args.input) as midi_input, mido.open_output(args.out) as midi_output:
-        midi_output.send(mido.Message("sysex", data=GLOBAL_SETTINGS_REQUEST_DATA))
-        deadline = time.monotonic() + args.timeout
-        while time.monotonic() < deadline and len(fragments) < 4:
-            for message in midi_input.iter_pending():
-                if message.type != "sysex":
-                    continue
-                command, subcommand, payload = decode_sysex_data(bytes(message.data))
-                if command == 0x04:
-                    accept_settings_fragment(fragments, subcommand, payload)
-            time.sleep(0.01)
+    print(
+        "Opening a fresh input/output session, settling briefly, and discarding "
+        "stale pending input before one request..."
+    )
+    try:
+        with (
+            mido.open_input(args.input) as midi_input,
+            mido.open_output(args.out) as midi_output,
+        ):
+            time.sleep(MIDI_POST_OPEN_SETTLE_SECONDS)
+            stale_count = sum(1 for _ in midi_input.iter_pending())
+            if stale_count:
+                print(f"Discarded {stale_count} stale pending MIDI message(s).")
 
-    logical = reassemble_settings_fragments(fragments)
+            midi_output.send(mido.Message("sysex", data=GLOBAL_SETTINGS_REQUEST_DATA))
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline and len(fragments) < 4:
+                for message in midi_input.iter_pending():
+                    if message.type != "sysex":
+                        continue
+                    command, subcommand, payload = decode_sysex_data(
+                        bytes(message.data)
+                    )
+                    if command == 0x04:
+                        accept_settings_fragment(fragments, subcommand, payload)
+                time.sleep(0.01)
+
+        logical = reassemble_settings_fragments(fragments)
+    except ExampleError as error:
+        raise ExampleError(
+            f"{error} MIDI ports are closed. Do not retry automatically; wait at "
+            f"least {MIDI_RETRY_COOLDOWN_SECONDS:g} seconds with the ports closed, "
+            "then start a fresh operator-authorized session."
+        ) from error
 
     print("Received 4 valid fragments.")
     print("Reassembled response: 71 bytes beginning 12 10.")
@@ -272,9 +309,10 @@ def require_field(fields: dict[int, bytes], identifier: int, length: int | None 
 
 def inspect_prst(args: argparse.Namespace) -> None:
     path = Path(args.file)
+    size = path.stat().st_size
+    if size != 515:
+        raise ExampleError(f"{path.name} has {size} bytes; expected 515.")
     data = path.read_bytes()
-    if len(data) != 515:
-        raise ExampleError(f"{path.name} has {len(data)} bytes; expected 515.")
 
     expected_header = b"Pocket Master" + bytes(5)
     if data[:18] != expected_header:
@@ -402,7 +440,10 @@ def build_parser() -> argparse.ArgumentParser:
     settings_parser.add_argument("--in", dest="input", required=True, help="Exact MIDI input.")
     settings_parser.add_argument("--out", required=True, help="Exact MIDI output.")
     settings_parser.add_argument(
-        "--timeout", type=float, default=3.0, help="Receive timeout in seconds (default: 3)."
+        "--timeout",
+        type=positive_finite_seconds,
+        default=3.0,
+        help="Finite receive timeout greater than zero, in seconds (default: 3).",
     )
     settings_parser.add_argument(
         "--dry-run",
