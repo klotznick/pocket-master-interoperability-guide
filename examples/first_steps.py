@@ -10,6 +10,7 @@ Offline .prst inspection uses only the Python standard library.
 from __future__ import annotations
 
 import argparse
+import math
 import struct
 import sys
 import time
@@ -33,6 +34,7 @@ GLOBAL_TAG_NAMES = {
     0x0405: "Bluetooth record level",
 }
 GLOBAL_SETTINGS_REQUEST_DATA = bytes.fromhex("0B 09 00 01 00 00 00 02 01 02 01 00")
+GLOBAL_SETTINGS_REQUEST_RAW = bytes([0xF0]) + GLOBAL_SETTINGS_REQUEST_DATA + bytes([0xF7])
 
 
 class ExampleError(RuntimeError):
@@ -83,17 +85,22 @@ def list_ports(_: argparse.Namespace) -> None:
 
 
 def toggle_nr(args: argparse.Namespace) -> None:
-    mido = require_mido()
     starting_on = args.starting == "on"
     target_value = 0 if starting_on else 127
     restore_value = 127 if starting_on else 0
 
+    print("Risk: Live — changes the unsaved NR state; sends no preset-save command.")
     print(f"Output: {args.out}")
     print(f"Recorded starting state: NR {args.starting.upper()}")
     print(
         f"Target bytes:  B0 2B {target_value:02X}\n"
         f"Restore bytes: B0 2B {restore_value:02X}"
     )
+    if args.dry_run:
+        print("Dry run: no MIDI library loaded, no port opened, and no message sent.")
+        return
+
+    mido = require_mido()
     if input("Type TOGGLE to send the target and prepare an automatic restore: ") != "TOGGLE":
         raise ExampleError("Cancelled before sending anything.")
 
@@ -120,7 +127,10 @@ def toggle_nr(args: argparse.Namespace) -> None:
                         value=restore_value,
                     )
                 )
-                print(f"Restore sent: B0 2B {restore_value:02X}")
+                print(
+                    f"Restore message sent: B0 2B {restore_value:02X}; "
+                    "verify the original state on the device."
+                )
 
 
 def decode_sysex_data(data: bytes) -> tuple[int, int, bytes]:
@@ -176,12 +186,51 @@ def describe_global_value(tag: int, value: bytes) -> str:
     return value.hex(" ").upper()
 
 
-def read_settings(args: argparse.Namespace) -> None:
-    mido = require_mido()
-    fragments: dict[int, bytes] = {}
+def accept_settings_fragment(
+    fragments: dict[int, bytes], subcommand: int, payload: bytes
+) -> None:
+    if subcommand not in range(4):
+        raise ExampleError(f"Settings fragment index {subcommand:02X} is outside 00...03.")
+    if subcommand in fragments:
+        if fragments[subcommand] == payload:
+            raise ExampleError(f"Duplicate settings fragment index {subcommand:02X}.")
+        raise ExampleError(f"Conflicting duplicate settings fragment index {subcommand:02X}.")
+    expected = len(fragments)
+    if subcommand != expected:
+        raise ExampleError(
+            f"Out-of-order settings fragment index {subcommand:02X}; "
+            f"expected {expected:02X}."
+        )
+    fragments[subcommand] = payload
 
+
+def reassemble_settings_fragments(fragments: dict[int, bytes]) -> bytes:
+    missing = [index for index in range(4) if index not in fragments]
+    if missing:
+        raise ExampleError(
+            f"Timed out before receiving all four settings fragments; missing {missing}."
+        )
+    logical = b"".join(fragments[index] for index in range(4))
+    if len(logical) != 71 or not logical.startswith(b"\x12\x10"):
+        raise ExampleError(
+            f"Unexpected reassembled response: {len(logical)} bytes, "
+            f"prefix {logical[:2].hex(' ').upper()}."
+        )
+    return logical
+
+
+def read_settings(args: argparse.Namespace) -> None:
+    print("Risk: Device read — sends one settings request and no state-changing command.")
     print(f"Input:  {args.input}")
     print(f"Output: {args.out}")
+    print("Logical request: 12 10")
+    print(f"Raw SysEx:       {GLOBAL_SETTINGS_REQUEST_RAW.hex(' ').upper()}")
+    if args.dry_run:
+        print("Dry run: no MIDI library loaded, no port opened, and no message sent.")
+        return
+
+    mido = require_mido()
+    fragments: dict[int, bytes] = {}
     print("Opening the input before sending the read-only request...")
     with mido.open_input(args.input) as midi_input, mido.open_output(args.out) as midi_output:
         midi_output.send(mido.Message("sysex", data=GLOBAL_SETTINGS_REQUEST_DATA))
@@ -190,27 +239,12 @@ def read_settings(args: argparse.Namespace) -> None:
             for message in midi_input.iter_pending():
                 if message.type != "sysex":
                     continue
-                try:
-                    command, subcommand, payload = decode_sysex_data(bytes(message.data))
-                except ExampleError as error:
-                    print(f"Ignored invalid SysEx: {error}", file=sys.stderr)
-                    continue
-                if command == 0x04 and subcommand < 4:
-                    fragments.setdefault(subcommand, payload)
+                command, subcommand, payload = decode_sysex_data(bytes(message.data))
+                if command == 0x04:
+                    accept_settings_fragment(fragments, subcommand, payload)
             time.sleep(0.01)
 
-    missing = [index for index in range(4) if index not in fragments]
-    if missing:
-        raise ExampleError(
-            f"Timed out before receiving all four settings fragments; missing {missing}."
-        )
-
-    logical = b"".join(fragments[index] for index in range(4))
-    if len(logical) != 71 or not logical.startswith(b"\x12\x10"):
-        raise ExampleError(
-            f"Unexpected reassembled response: {len(logical)} bytes, "
-            f"prefix {logical[:2].hex(' ').upper()}."
-        )
+    logical = reassemble_settings_fragments(fragments)
 
     print("Received 4 valid fragments.")
     print("Reassembled response: 71 bytes beginning 12 10.")
@@ -262,9 +296,9 @@ def inspect_prst(args: argparse.Namespace) -> None:
 
     raw_name = payload[4:20].split(b"\0", 1)[0]
     try:
-        name = raw_name.decode("ascii")
-    except UnicodeDecodeError as error:
-        raise ExampleError("Preset name is not valid ASCII.") from error
+        name = raw_name.decode("utf-8")
+    except UnicodeDecodeError:
+        name = "<not valid UTF-8; see raw bytes>"
 
     sections = parse_tlvs(payload[20:])
     format_fields = parse_tlvs(require_field(sections, 0x00FF))
@@ -275,6 +309,11 @@ def inspect_prst(args: argparse.Namespace) -> None:
         raise ExampleError("Preset trailer is not the observed eight zero bytes.")
 
     record_version = int.from_bytes(require_field(format_fields, 0x0001, 4), "little")
+    if record_version != 2:
+        raise ExampleError(
+            f"Unsupported stored-preset record version {record_version}; "
+            "only observed version 2 is interpreted."
+        )
     require_field(format_fields, 0x0002, 4)
     module_count = int.from_bytes(require_field(layout_fields, 0x1001, 4), "little")
     parameter_slots = int.from_bytes(require_field(layout_fields, 0x1002, 4), "little")
@@ -287,6 +326,10 @@ def inspect_prst(args: argparse.Namespace) -> None:
     preset_level = int.from_bytes(require_field(global_fields, 0x2001, 4), "little")
     tempo = int.from_bytes(require_field(global_fields, 0x2002, 4), "little")
     enable_mask = int.from_bytes(require_field(module_fields, 0x3001, 4), "little")
+    if enable_mask & ~0x03FF:
+        raise ExampleError(
+            f"Module-enable mask {enable_mask:08X} sets bits outside known modules 0...9."
+        )
     chain = list(require_field(module_fields, 0x3002, 10))
     if sorted(chain) != list(range(10)):
         raise ExampleError("Signal chain is not a complete ten-module permutation.")
@@ -296,6 +339,7 @@ def inspect_prst(args: argparse.Namespace) -> None:
     print(f"File:            {path}")
     print(f"Container:       valid, version {header_version}, CRC {stored_crc:02X}")
     print(f"Preset:          {name}")
+    print(f"Preset name raw: {raw_name.hex(' ').upper() or '(empty)'}")
     print(f"Record version:  {record_version}")
     print(f"Preset level:    {preset_level}")
     print(f"Tempo:           {tempo} BPM")
@@ -305,10 +349,21 @@ def inspect_prst(args: argparse.Namespace) -> None:
         effect_id = int.from_bytes(
             effect_bytes[module_id * 4 : module_id * 4 + 4], "little"
         )
-        parameters = struct.unpack_from("<8f", parameter_bytes, module_id * 32)
+        parameter_base = module_id * 32
+        parameters = struct.unpack_from("<8f", parameter_bytes, parameter_base)
         state = "on" if enable_mask & (1 << module_id) else "bypassed"
         position = chain.index(module_id)
-        formatted_parameters = ", ".join(f"{value:g}" for value in parameters)
+        formatted: list[str] = []
+        for parameter_index, value in enumerate(parameters):
+            raw_start = parameter_base + parameter_index * 4
+            raw_value = parameter_bytes[raw_start : raw_start + 4]
+            if math.isfinite(value):
+                formatted.append(f"{value:g}")
+            else:
+                formatted.append(
+                    f"{value} (raw {raw_value.hex(' ').upper()})"
+                )
+        formatted_parameters = ", ".join(formatted)
         print(
             f"  {position:>2}  {module_name:<5} {state:<8} "
             f"effect {effect_id:<10} params [{formatted_parameters}]"
@@ -334,6 +389,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="NR state observed before running the command.",
     )
+    toggle_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print risk and exact bytes without loading MIDI or opening a port.",
+    )
     toggle_parser.set_defaults(handler=toggle_nr)
 
     settings_parser = subparsers.add_parser(
@@ -343,6 +403,11 @@ def build_parser() -> argparse.ArgumentParser:
     settings_parser.add_argument("--out", required=True, help="Exact MIDI output.")
     settings_parser.add_argument(
         "--timeout", type=float, default=3.0, help="Receive timeout in seconds (default: 3)."
+    )
+    settings_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print risk and exact bytes without loading MIDI or opening a port.",
     )
     settings_parser.set_defaults(handler=read_settings)
 

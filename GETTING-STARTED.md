@@ -2,7 +2,7 @@
 
 This is the practical on-ramp to the [Pocket Master Interoperability Reference](https://github.com/klotznick/pocket-master-interoperability-guide#readme). It walks through three bounded exercises:
 
-1. toggle and restore one effect with standard MIDI;
+1. toggle one effect and send its restoration message with standard MIDI;
 2. request global settings without changing them;
 3. inspect one of your own `.prst` files entirely offline.
 
@@ -80,7 +80,7 @@ If the pedal is absent from either list:
 - disconnect and reconnect the pedal;
 - rerun the command before attempting anything else.
 
-## Exercise 1: toggle and restore Noise Reduction
+## Exercise 1: toggle Noise Reduction and send its restoration
 
 **Effect:** Live sound change, not a preset save.
 
@@ -97,6 +97,14 @@ Before running it:
 2. look at the pedal and record whether NR is currently **On** or **Bypassed**;
 3. substitute the exact output name reported by the port command.
 
+Preview the live risk category and exact target/restoration bytes first:
+
+```console
+python examples/first_steps.py toggle-nr --out "Pocket Master" --starting on --dry-run
+```
+
+Use `--starting off` instead if NR begins bypassed. Dry-run exits without loading Mido, opening a port, prompting for confirmation, or sending anything.
+
 If NR begins on:
 
 ```console
@@ -109,13 +117,13 @@ If NR begins bypassed:
 python examples/first_steps.py toggle-nr --out "Pocket Master" --starting off
 ```
 
-The script prints the target and restoration bytes before sending anything. It sends only after you type `TOGGLE`, waits while you observe the pedal, and then restores the recorded starting state. Its `finally` block also attempts restoration if you interrupt it with Ctrl-C after the first send.
+The script prints the target and restoration bytes before sending anything. It sends only after you type `TOGGLE`, waits while you observe the pedal, and then sends the restoration message. Its `finally` block also attempts that message if you interrupt it with Ctrl-C after the first send.
 
 Expected result:
 
 1. NR changes once on the pedal;
 2. you press Enter;
-3. the original NR state returns;
+3. the restoration message is sent and you verify the original NR state on the pedal;
 4. no save command is sent.
 
 Example output when NR starts on:
@@ -125,7 +133,7 @@ Target bytes:  B0 2B 00
 Restore bytes: B0 2B 7F
 Type TOGGLE to send the target and prepare an automatic restore: TOGGLE
 Observe the NR state, then press Enter to restore it:
-Restore sent: B0 2B 7F
+Restore message sent: B0 2B 7F; verify the original state on the device.
 ```
 
 If the first change is not visible, stop. Do not try adjacent controller numbers. Recheck the port name, MIDI connection, and original state. If the script cannot send the restoration message because the cable or pedal disconnects, reconnect and manually return NR to the state you recorded.
@@ -139,6 +147,15 @@ The request asks for the tagged global-settings block:
 ```text
 Logical field: 12 10
 Raw SysEx:     F0 0B 09 00 01 00 00 00 02 01 02 01 00 F7
+```
+
+Preview the risk category and complete request without loading Mido or opening either port:
+
+```console
+python examples/first_steps.py read-settings \
+  --in "Pocket Master" \
+  --out "Pocket Master" \
+  --dry-run
 ```
 
 Run it with the exact input and output names from the port listing:
@@ -210,11 +227,13 @@ The inspector validates:
 - observed container-header version 0 or 2;
 - the payload CRC-8;
 - the `FFFFFFFF` saved-record slot placeholder;
+- stored-preset record version 2, the only established layout interpreted here;
 - the complete TLV structure;
 - the ten-module, eight-parameter layout;
+- an enable mask limited to known modules 0–9;
 - the signal-chain permutation and expected field sizes.
 
-It then prints the preset name, level, tempo, signal chain, module states, effect IDs, and all eight raw float slots for each module.
+It then prints the preset name and its raw bytes, level, tempo, signal chain, module states, effect IDs, and all eight float slots for each module. A name that is not valid UTF-8 is retained as raw bytes rather than declared invalid. Non-finite float values are shown with their raw four bytes and are not assigned a device meaning.
 
 Example shape:
 
@@ -229,6 +248,16 @@ Modules:
 ```
 
 An error is useful evidence: do not ignore a length, header, CRC, placeholder, TLV, or layout failure. It may be a different format, a damaged file, or an unsupported version. This example deliberately reads but never modifies the file.
+
+## Run the regression checks
+
+The repository includes dependency-free checks for the framing, transfer, dry-run, restoration-attempt, and synthetic preset invariants used by these examples:
+
+```console
+python -m unittest discover -s tests -v
+```
+
+The tests use Python's standard library, synthetic preset data, and fake MIDI ports. They do not require Mido, connect to hardware, open a MIDI endpoint, or publish a preset.
 
 ## The state model to keep in mind
 
@@ -247,7 +276,7 @@ Standard MIDI changes and vendor-specific parameter writes can affect the live b
 After these exercises, you have:
 
 - selected exact MIDI endpoints rather than guessing;
-- sent and reversed one documented live command;
+- sent one documented live command and its restoration message, then verified the device state;
 - completed one semantically validated read;
 - parsed a complete preset file without transmitting anything.
 
