@@ -175,11 +175,15 @@ python examples/first_steps.py read-settings --in "Pocket Master" --out "Pocket 
 The script:
 
 1. opens the input before transmitting;
-2. sends the request once;
-3. accepts only valid nibble-encoded SysEx frames with matching length and CRC;
-4. requires command `04` fragments `00` through `03`;
-5. reassembles exactly 71 logical bytes beginning `12 10`;
-6. prints every tagged value, retaining raw bytes for unmapped tags.
+2. waits briefly for the fresh MIDI session to settle and discards stale pending input;
+3. sends the request exactly once;
+4. accepts only valid nibble-encoded SysEx frames with matching length and CRC;
+5. requires command `04` fragments `00` through `03`;
+6. reassembles exactly 71 logical bytes beginning `12 10`;
+7. closes both ports before reporting an incomplete or malformed transfer;
+8. prints every tagged value, retaining raw bytes for unmapped tags.
+
+`--timeout` must be finite and greater than zero. It controls only the receive window; it does not enable retries.
 
 Successful output begins:
 
@@ -196,9 +200,12 @@ If it times out:
 
 - verify that both exact port names are correct;
 - close every other editor that may own or consume the MIDI input;
-- reconnect the pedal and list the ports again;
-- try one more settled request;
-- do not convert the read into a write or repeatedly flood the endpoint.
+- leave both MIDI ports closed for at least ten seconds;
+- reconnect the pedal and list the ports again if necessary;
+- start one fresh operator-authorized session and try one more settled request;
+- do not retry automatically, combine a partial response, convert the read into a write, or repeatedly flood the endpoint.
+
+Missing feedback does not prove that a transmitted operation failed. For this read-only command, discard the incomplete result. For any future write workflow, retain the requested operation as indeterminate until a fresh complete read establishes device state.
 
 A valid frame proves transport integrity. The complete four-fragment, 71-byte response with the expected `12 10` prefix is what establishes that this particular read succeeded.
 
