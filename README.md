@@ -220,7 +220,7 @@ USB-originated changes were visible in SONICLINK over BLE. In the tested concurr
 
 A separate Windows USB campaign reproduced the established framing, CRC, multipart, settings, directory, current-index, live-buffer, stored-record, standard-MIDI, and vendor-specific live-edit behavior through Mido/python-rtmidi rather than macOS CoreMIDI. Windows exposed the device as distinct `Pocket Master MIDI 0` input and `Pocket Master MIDI 1` output endpoints; those names are observations, not a universal matching rule.
 
-The campaign completed adjacent target/readback/inverse coverage for all 83 registered effect models and all 317 declared parameters, totaling 451 verified reversible transitions. This is coverage of one bounded adjacent transition per exact model or parameter identity, not every value in every declared range. Stored P06 and P07 remained unchanged, the final state returned to verified P07, and no persistent write was sent.
+The campaign selected and semantically read back all 83 registered effect models. All 317 declared parameters completed adjacent target/readback/inverse coverage, for 451 verified transitions across the complete model-selection and parameter campaign. Direct bidirectional model restoration was demonstrated only by the Scream ↔ Butter OD canary; other model tests restored the control state by reselecting P07. Parameter coverage does not test every value in every declared range. Stored P06 and P07 remained unchanged, the final state returned to verified P07, and no persistent write was sent.
 
 ### Two looper actions remain underspecified
 
@@ -353,7 +353,7 @@ The following logical write forms have been established. “Confirmed” applies
 | Field | Logical-message shape | Hardware-tested scope |
 |:---|:---|:---|
 | `11 48` | `11 48 + uint32_le(module_slot) + uint32_le(parameter) + float32_le(value)` | Adjacent target/readback/inverse coverage for all 317 declared parameters across 83 exact registered models |
-| `11 47` | `11 47 + uint32_le(module) + uint32_le(slot) + uint32_le(effect_id)` | Adjacent target/readback/inverse coverage across all 83 registered effect models |
+| `11 47` | `11 47 + uint32_le(module) + uint32_le(slot) + uint32_le(effect_id)` | Selection plus semantic readback for all 83 registered models; direct bidirectional restoration only for Scream ↔ Butter OD |
 | `11 44` | `11 44 + module_order[10]` | One adjacent FX2 ↔ DLY chain transition only |
 | `11 4C` | `11 4C + uint32_le(P bank index) + utf8_name[10]` | P05 rename and exact restoration |
 | `11 4A` | `11 4A + uint32_le(P bank index) + utf8_name[10]` | Saving the verified current live buffer back to the same P bank slot |
@@ -368,7 +368,7 @@ The following exact addresses remain useful worked examples from the earlier bou
 | NR | none required | `0` THRE | `0…100`, step 1 |
 | FX1 — COMP 2 | `1` / `0x00000001` | `0` Sustain; `1` Attack; `2` VOL; `3` Clip | `0…100`, step 1 |
 | DRV — Scream / Green Drive | `50331648` / `0x03000000` | `0` Gain; `1` Tone; `2` VOL | `0…100`, step 1 |
-| AMP — Dark Twin / Black Twin | `117440516` / `0x07000004` | `0` Gain; `1` VOL; `2` Bass; `3` Middle; `4` Treble; `5` Bright | Gain/VOL/Bass/Middle/Treble `0…100`, step 1; Bright Boolean `0/1` |
+| AMP — Dark Twin / Black Twin | `117440516` / `0x07000004` | `0` Gain; `1` VOL; `2` Bass; `3` Middle; `4` Treble; `5` Bright | Gain/VOL/Bass/Middle/Treble `0…100`, step 1; Bright applied at tested values `0/1`, while tested value `2` was ignored |
 | EQ — GT EQ 1 / Guitar EQ 1 | `16777269` / `0x01000035` | `0` 125Hz; `1` 400Hz; `2` 800Hz; `3` 1.6kHz; `4` 4kHz; `5` VOL | bands `-50…50`; VOL `0…100`; step 1 |
 | FX2 — A-Chorus / Aozora Chorus | `67108864` / `0x04000000` | `0` Depth; `1` Rate; `2` Tone | Depth/Tone `0…100`, step 1; Rate `0.1…10`, step 0.1 |
 | DLY — Pure / Pure Eko | `184549376` / `0x0B000000` | `0` Mix; `1` Time; `2` F.Back | Mix/F.Back `0…100`; Time `20…1000`; step 1 |
@@ -376,7 +376,7 @@ The following exact addresses remain useful worked examples from the earlier bou
 
 Every row is specific to the listed module, effect ID, parameter index, implementation range, and step. Bounded hardware tests exercised starting and adjacent or representative values rather than every value in every listed range; the implementation bounds also reflect the recovered application behavior already recorded by the project. They are not claims about theoretical encoding limits or full-range acceptance. In particular, RVB Decay is algorithm parameter index `2`, not `1`.
 
-The later Windows matrix extended adjacent target/readback/inverse coverage to all 83 registered effect models and 317 declared parameters while preserving exact module/effect identity. It did not test every encoded value. Two range corrections were independently observed on firmware V1.3.3: Dark Twin Bright accepted only Boolean `0/1`, and Reverse Time accepted raw 20 and 499 while acknowledged values above the effective maximum 500 were ignored rather than applied.
+The later Windows matrix selected and semantically read back all 83 registered effect models while preserving exact module/effect identity. All 317 declared parameters completed adjacent target/readback/inverse coverage. Direct bidirectional model restoration was limited to the Scream ↔ Butter OD canary; other model tests restored P07 by preset reselection. Parameter testing did not cover every encoded value. Dark Twin Bright applied at tested values 0 and 1 while tested value 2 was ignored, so it behaved as Boolean only for those tested values. Reverse Time accepted raw 20 and 499, while the specifically tested values 501, 502, 505, 510, 520, and 780 were acknowledged but ignored. This establishes an observed boundary at 500, not the behavior of every value above it.
 
 Bidirectional DRV `50331648` / `0x03000000` (Scream / Green Drive) ↔ `50331650` / `0x03000002` (Butter OD / Yellow Drive) remains a concise worked `11 47` example. The only hardware-tested `11 44` chain transition is the exact adjacent FX2/DLY pair:
 
@@ -488,7 +488,7 @@ Saved-slot copy through `11 4B` is also confirmed. Copying a stored preset can u
 - Device Save As through `11 4A` to a different P bank slot has not completed its own bounded validation.
 - Only Display Brightness has a hardware-confirmed `11 11` global-setting write; the other mapped settings remain read-only.
 - IR/Clone transfer and firmware update are outside this public documentation scope.
-- The exhaustive effect campaign establishes adjacent reversible transitions, not acceptance of every value in each declared parameter range.
+- The exhaustive parameter campaign establishes adjacent reversible transitions, not acceptance of every value in each declared range; the model-selection campaign has a different restoration boundary described above.
 - One Windows session produced no observable tuner state change from CC 58; this does not override the published MIDI assignment or prior physical observation.
 - Findings should not be assumed to apply to firmware versions that were not tested.
 
