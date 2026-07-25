@@ -8,6 +8,8 @@ This project is not affiliated with or endorsed by Sonicake. Sonicake and Pocket
 
 **Last updated:** July 24, 2026
 
+> New to MIDI or device protocols? Start with [Pocket Master Interoperability: First 30 Minutes](GETTING-STARTED.md) for three bounded, runnable exercises.
+
 ## Scope
 
 - Primary tested device firmware: Pocket Master V1.3.3
