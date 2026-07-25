@@ -117,25 +117,67 @@ def synthetic_prst(
 
 
 class FakePort:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.sent: list[types.SimpleNamespace] = []
+        self.events = events
 
     def __enter__(self) -> "FakePort":
+        if self.events is not None:
+            self.events.append("output entered")
         return self
 
     def __exit__(self, *args: object) -> None:
+        if self.events is not None:
+            self.events.append("output closed")
         return None
 
     def send(self, message: types.SimpleNamespace) -> None:
+        if self.events is not None:
+            self.events.append("request sent")
         self.sent.append(message)
 
 
+class FakeInput:
+    def __init__(
+        self,
+        batches: list[list[types.SimpleNamespace]],
+        events: list[str] | None = None,
+    ) -> None:
+        self.batches = list(batches)
+        self.events = events
+        self.pending_calls = 0
+
+    def __enter__(self) -> "FakeInput":
+        if self.events is not None:
+            self.events.append("input entered")
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        if self.events is not None:
+            self.events.append("input closed")
+        return None
+
+    def iter_pending(self) -> list[types.SimpleNamespace]:
+        self.pending_calls += 1
+        if self.events is not None:
+            self.events.append(
+                "stale input drained" if self.pending_calls == 1 else "response read"
+            )
+        return self.batches.pop(0) if self.batches else []
+
+
 class FakeMido:
-    def __init__(self, output: FakePort) -> None:
+    def __init__(self, output: FakePort, midi_input: FakeInput | None = None) -> None:
         self.output = output
+        self.midi_input = midi_input
 
     def open_output(self, _: str) -> FakePort:
         return self.output
+
+    def open_input(self, _: str) -> FakeInput:
+        if self.midi_input is None:
+            raise AssertionError("Unexpected MIDI input open.")
+        return self.midi_input
 
     @staticmethod
     def Message(message_type: str, **values: object) -> types.SimpleNamespace:
@@ -217,6 +259,28 @@ class SettingsTransferTests(unittest.TestCase):
 
 
 class CommandSafetyTests(unittest.TestCase):
+    def test_timeout_must_be_finite_and_greater_than_zero(self) -> None:
+        for invalid in ("0", "-1", "nan", "inf", "-inf"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    first_steps.positive_finite_seconds(invalid)
+        self.assertEqual(first_steps.positive_finite_seconds("0.25"), 0.25)
+
+    def test_invalid_timeout_never_loads_mido(self) -> None:
+        args = argparse.Namespace(
+            input="Pocket Master",
+            out="Pocket Master",
+            timeout=math.inf,
+            dry_run=False,
+        )
+        with (
+            mock.patch.object(
+                first_steps, "require_mido", side_effect=AssertionError("loaded Mido")
+            ),
+            self.assertRaisesRegex(first_steps.ExampleError, "finite"),
+        ):
+            first_steps.read_settings(args)
+
     def test_toggle_dry_run_never_loads_mido_or_prompts(self) -> None:
         args = argparse.Namespace(
             out="Pocket Master", starting="on", dry_run=True
@@ -255,6 +319,73 @@ class CommandSafetyTests(unittest.TestCase):
             output.getvalue(),
         )
         self.assertIn("no port opened", output.getvalue())
+
+    def test_settings_uses_fresh_settled_session_and_drains_stale_input(self) -> None:
+        events: list[str] = []
+        stale = types.SimpleNamespace(type="clock")
+        responses = [
+            types.SimpleNamespace(
+                type="sysex",
+                data=encode_frame(4, index, payload),
+            )
+            for index, payload in enumerate(settings_fragments())
+        ]
+        midi_input = FakeInput([[stale], responses], events)
+        output_port = FakePort(events)
+        args = argparse.Namespace(
+            input="Pocket Master",
+            out="Pocket Master",
+            timeout=3.0,
+            dry_run=False,
+        )
+        with (
+            mock.patch.object(
+                first_steps,
+                "require_mido",
+                return_value=FakeMido(output_port, midi_input),
+            ),
+            mock.patch.object(
+                first_steps.time, "sleep", return_value=None
+            ) as sleep_mock,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            first_steps.read_settings(args)
+
+        self.assertEqual(len(output_port.sent), 1)
+        sleep_mock.assert_any_call(first_steps.MIDI_POST_OPEN_SETTLE_SECONDS)
+        self.assertLess(events.index("stale input drained"), events.index("request sent"))
+        self.assertLess(events.index("request sent"), events.index("response read"))
+        self.assertLess(events.index("response read"), events.index("output closed"))
+        self.assertLess(events.index("response read"), events.index("input closed"))
+
+    def test_settings_timeout_closes_ports_and_requires_cooldown(self) -> None:
+        events: list[str] = []
+        midi_input = FakeInput([[]], events)
+        output_port = FakePort(events)
+        args = argparse.Namespace(
+            input="Pocket Master",
+            out="Pocket Master",
+            timeout=0.001,
+            dry_run=False,
+        )
+        with (
+            mock.patch.object(
+                first_steps,
+                "require_mido",
+                return_value=FakeMido(output_port, midi_input),
+            ),
+            mock.patch.object(first_steps.time, "sleep", return_value=None),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(
+                first_steps.ExampleError,
+                "ports are closed.*Do not retry automatically.*10 seconds",
+            ),
+        ):
+            first_steps.read_settings(args)
+
+        self.assertEqual(len(output_port.sent), 1)
+        self.assertIn("output closed", events)
+        self.assertIn("input closed", events)
 
     def test_toggle_sends_target_then_restore(self) -> None:
         port = FakePort()
@@ -322,6 +453,20 @@ class PresetInspectorTests(unittest.TestCase):
         self.assert_inspector_error(
             synthetic_prst(placeholder=0), "slot placeholder"
         )
+
+    def test_size_is_checked_before_reading_file_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oversized.prst"
+            path.write_bytes(bytes(516))
+            with (
+                mock.patch.object(
+                    Path,
+                    "read_bytes",
+                    side_effect=AssertionError("file contents were read"),
+                ),
+                self.assertRaisesRegex(first_steps.ExampleError, "expected 515"),
+            ):
+                first_steps.inspect_prst(argparse.Namespace(file=str(path)))
 
     def test_unsupported_record_version_is_rejected_before_interpretation(self) -> None:
         self.assert_inspector_error(
