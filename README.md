@@ -6,7 +6,7 @@ It combines a practical standard-MIDI reference with narrowly scoped, independen
 
 This project is not affiliated with or endorsed by Sonicake. Sonicake and Pocket Master are used only to identify the compatible product. Obtain manuals, applications, firmware, and drivers directly from Sonicake.
 
-**Last updated:** July 24, 2026
+**Last updated:** July 25, 2026
 
 > New to MIDI or device protocols? Start with [Pocket Master Interoperability: First 30 Minutes](GETTING-STARTED.md) for three bounded, runnable exercises.
 
@@ -23,7 +23,7 @@ These notes describe original observations and interoperability facts. They do n
 
 Read requests are generally lower risk, but live edits can cause sudden volume or tonal changes, and persistent writes can overwrite user presets. Before transmitting, confirm the exact connected product and firmware, close or disconnect other editors where possible, and reduce monitoring volume before testing live controls.
 
-For persistent work, back up the destination and use a sacrificial P bank slot during development. Verify complete semantic readback rather than relying only on an acknowledgement, and prove the restoration path before depending on the workflow. Never select a write destination solely from stale UI state, a previously sent preset-selection CC, or an unverified cached address.
+For persistent work, back up the destination and use a sacrificial P bank slot during development. Verify complete semantic readback rather than relying only on an acknowledgement, and prove the restoration path before depending on the workflow. Never select a write destination solely from stale UI state, a previously sent preset-selection CC, or an unverified cached address. If feedback disappears after transmission, do not assume the write failed and do not retry automatically: close the MIDI session, preserve the operation as indeterminate, and reread complete state in a fresh operator-authorized session.
 
 ## Contents
 
@@ -214,6 +214,14 @@ A valid checksum, generic acknowledgement, audible change, or updated editor dis
 
 USB-originated changes were visible in SONICLINK over BLE. In the tested concurrent session, BLE-originated changes were not echoed to the passive USB listener. A USB application therefore cannot assume that passive monitoring provides complete current state while another editor is active.
 
+### Windows USB reproduces the state model
+
+**Confirmed on one Pocket Master running firmware V1.3.3 · Read and Live**
+
+A separate Windows USB campaign reproduced the established framing, CRC, multipart, settings, directory, current-index, live-buffer, stored-record, standard-MIDI, and vendor-specific live-edit behavior through Mido/python-rtmidi rather than macOS CoreMIDI. Windows exposed the device as distinct `Pocket Master MIDI 0` input and `Pocket Master MIDI 1` output endpoints; those names are observations, not a universal matching rule.
+
+The campaign completed adjacent target/readback/inverse coverage for all 83 registered effect models and all 317 declared parameters, totaling 451 verified reversible transitions. This is coverage of one bounded adjacent transition per exact model or parameter identity, not every value in every declared range. Stored P06 and P07 remained unchanged, the final state returned to verified P07, and no persistent write was sent.
+
 ### Two looper actions remain underspecified
 
 **Unknown · Potentially live**
@@ -264,7 +272,7 @@ After reassembly, it should also reject a logical message that is shorter than t
 | `12 4F` | Stored-preset read by explicit absolute address | Device read |
 | `12 42` | Preset Volume feedback | Live feedback |
 | `12 45` | State flag correlated with unsaved edit (`01`) and save completion (`00`) | Supporting feedback only |
-| `12 48` | Model-parameter feedback; first isolated as NR threshold | Live feedback |
+| `12 48` | Model-parameter feedback observed in earlier isolated reads; first isolated as NR threshold | Live feedback; not observed during the Windows parameter matrix |
 | `12 49` | Original-module enabled state | Live feedback |
 | `12 1B` | Mode-2 invalidation observed after rename/save, prompting a directory reread | Supporting feedback only |
 | `14 08` | Generic transport acknowledgement; status `00` observed on success | Transport feedback only |
@@ -344,8 +352,8 @@ The following logical write forms have been established. “Confirmed” applies
 
 | Field | Logical-message shape | Hardware-tested scope |
 |:---|:---|:---|
-| `11 48` | `11 48 + uint32_le(module_slot) + uint32_le(parameter) + float32_le(value)` | Bounded tests of the listed parameter addresses across NR, FX1, DRV, AMP, EQ, FX2, DLY, and RVB |
-| `11 47` | `11 47 + uint32_le(module) + uint32_le(slot) + uint32_le(effect_id)` | DRV Scream ↔ Butter OD only |
+| `11 48` | `11 48 + uint32_le(module_slot) + uint32_le(parameter) + float32_le(value)` | Adjacent target/readback/inverse coverage for all 317 declared parameters across 83 exact registered models |
+| `11 47` | `11 47 + uint32_le(module) + uint32_le(slot) + uint32_le(effect_id)` | Adjacent target/readback/inverse coverage across all 83 registered effect models |
 | `11 44` | `11 44 + module_order[10]` | One adjacent FX2 ↔ DLY chain transition only |
 | `11 4C` | `11 4C + uint32_le(P bank index) + utf8_name[10]` | P05 rename and exact restoration |
 | `11 4A` | `11 4A + uint32_le(P bank index) + utf8_name[10]` | Saving the verified current live buffer back to the same P bank slot |
@@ -353,22 +361,24 @@ The following logical write forms have been established. “Confirmed” applies
 | `11 4F` | `11 4F + transformed 515-byte .prst container` | Direct import to a selected P bank slot with exact readback and restoration |
 | `11 11` | `11 11 + uint32_le(tag) + int32_le(value)` | Display Brightness 100 → 95 → 100 only |
 
-The hardware-tested `11 48` parameter addresses are narrower than the general logical-message shape:
+The following exact addresses remain useful worked examples from the earlier bounded matrix:
 
 | Module / required effect | Effect ID (decimal / hex) | Parameter index → label | Tested implementation range and step |
 |:---|---:|:---|:---|
 | NR | none required | `0` THRE | `0…100`, step 1 |
 | FX1 — COMP 2 | `1` / `0x00000001` | `0` Sustain; `1` Attack; `2` VOL; `3` Clip | `0…100`, step 1 |
 | DRV — Scream / Green Drive | `50331648` / `0x03000000` | `0` Gain; `1` Tone; `2` VOL | `0…100`, step 1 |
-| AMP — Dark Twin / Black Twin | `117440516` / `0x07000004` | `0` Gain; `1` VOL; `2` Bass; `3` Middle; `4` Treble; `5` Bright | `0…100`, step 1 |
+| AMP — Dark Twin / Black Twin | `117440516` / `0x07000004` | `0` Gain; `1` VOL; `2` Bass; `3` Middle; `4` Treble; `5` Bright | Gain/VOL/Bass/Middle/Treble `0…100`, step 1; Bright Boolean `0/1` |
 | EQ — GT EQ 1 / Guitar EQ 1 | `16777269` / `0x01000035` | `0` 125Hz; `1` 400Hz; `2` 800Hz; `3` 1.6kHz; `4` 4kHz; `5` VOL | bands `-50…50`; VOL `0…100`; step 1 |
 | FX2 — A-Chorus / Aozora Chorus | `67108864` / `0x04000000` | `0` Depth; `1` Rate; `2` Tone | Depth/Tone `0…100`, step 1; Rate `0.1…10`, step 0.1 |
 | DLY — Pure / Pure Eko | `184549376` / `0x0B000000` | `0` Mix; `1` Time; `2` F.Back | Mix/F.Back `0…100`; Time `20…1000`; step 1 |
 | RVB — Room | `201326592` / `0x0C000000` | `0` Mix; `2` Decay | `0…100`, step 1 |
 
-Every row is specific to the listed module, effect ID, parameter index, implementation range, and step. Bounded hardware tests exercised starting and adjacent or representative values rather than every value in every listed range; the implementation bounds also reflect the recovered application behavior already recorded by the project. They are not claims about theoretical encoding limits, other models, or all slots. No rejection, clamping, safety, or ignore behavior is implied for unlisted values. In particular, RVB Decay is algorithm parameter index `2`, not `1`; unlisted slots and models remain unverified.
+Every row is specific to the listed module, effect ID, parameter index, implementation range, and step. Bounded hardware tests exercised starting and adjacent or representative values rather than every value in every listed range; the implementation bounds also reflect the recovered application behavior already recorded by the project. They are not claims about theoretical encoding limits or full-range acceptance. In particular, RVB Decay is algorithm parameter index `2`, not `1`.
 
-The only hardware-tested `11 47` model transition is bidirectional DRV `50331648` / `0x03000000` (Scream / Green Drive) ↔ `50331650` / `0x03000002` (Butter OD / Yellow Drive). The only hardware-tested `11 44` chain transition is the exact adjacent FX2/DLY pair:
+The later Windows matrix extended adjacent target/readback/inverse coverage to all 83 registered effect models and 317 declared parameters while preserving exact module/effect identity. It did not test every encoded value. Two range corrections were independently observed on firmware V1.3.3: Dark Twin Bright accepted only Boolean `0/1`, and Reverse Time accepted raw 20 and 499 while acknowledged values above the effective maximum 500 were ignored rather than applied.
+
+Bidirectional DRV `50331648` / `0x03000000` (Scream / Green Drive) ↔ `50331650` / `0x03000002` (Butter OD / Yellow Drive) remains a concise worked `11 47` example. The only hardware-tested `11 44` chain transition is the exact adjacent FX2/DLY pair:
 
 ```text
 00 01 02 03 04 05 06 07 08 09
@@ -404,7 +414,7 @@ The source may be in the P or F bank, but the persistent destination must be in 
 
 ### Acknowledgements and semantic verification
 
-`14 08` is transport-level feedback. An observed `14 08 00` acknowledgement is not independently sufficient proof that a requested live or persistent state was applied. Verification is operation-specific:
+`14 08` is transport-level feedback. The Windows parameter, chain, and Display Brightness matrices produced `14 08 00` as their immediate acknowledgement rather than an exact `12 48` parameter echo. That acknowledgement is not independently sufficient proof that a requested live or persistent state was applied. Verification is operation-specific:
 
 - For a live bypass or parameter change, require matching state feedback or a fresh live-buffer read.
 - For rename, reread the complete preset-name directory.
@@ -478,6 +488,8 @@ Saved-slot copy through `11 4B` is also confirmed. Copying a stored preset can u
 - Device Save As through `11 4A` to a different P bank slot has not completed its own bounded validation.
 - Only Display Brightness has a hardware-confirmed `11 11` global-setting write; the other mapped settings remain read-only.
 - IR/Clone transfer and firmware update are outside this public documentation scope.
+- The exhaustive effect campaign establishes adjacent reversible transitions, not acceptance of every value in each declared parameter range.
+- One Windows session produced no observable tuner state change from CC 58; this does not override the published MIDI assignment or prior physical observation.
 - Findings should not be assumed to apply to firmware versions that were not tested.
 
 ## Contributing findings
