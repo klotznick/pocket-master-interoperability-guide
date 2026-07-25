@@ -6,7 +6,7 @@ It combines a practical standard-MIDI reference with narrowly scoped, independen
 
 This project is not affiliated with or endorsed by Sonicake. Sonicake and Pocket Master are used only to identify the compatible product. Obtain manuals, applications, firmware, and drivers directly from Sonicake.
 
-**Last updated:** July 21, 2026
+**Last updated:** July 24, 2026
 
 ## Scope
 
@@ -16,24 +16,6 @@ This project is not affiliated with or endorsed by Sonicake. Sonicake and Pocket
 - Connections observed: class-compliant USB MIDI and BLE MIDI through SONICLINK
 
 These notes describe original observations and interoperability facts. They do not include vendor software, firmware, manuals, decompiled source, creative assets, access-control material, or complete factory-preset datasets.
-
-### Compatibility and test environment
-
-| Component | Coverage |
-|:---|:---|
-| Pocket Master firmware V1.3.3 | Primary tested firmware |
-| Pocket Master firmware V1.3.0 | Published MIDI-table baseline |
-| Other firmware versions | Untested; compatibility must not be assumed |
-| USB class-compliant MIDI | Tested |
-| BLE MIDI through SONICLINK | Observed or tested only where explicitly described |
-| Primary USB test host | MacBook Air `MacBookAir10,1`, Apple M1, macOS 26.5.1 build `25F80` |
-| Sonicake Manager 1.3.0 for macOS | Used for USB protocol captures |
-| SONICLINK V1.6.9 | Used for connected iPhone BLE observations and exact-version Android analysis |
-| USB-reported device revision `0x0101` | Observed; not established as a PCB or hardware revision |
-| MIDI channel 1 | Tested |
-| MIDI channels 2–16 | Untested |
-| `.prst` record format version 2 | Confirmed for the tested format |
-| `.prst` container-header versions 0 and 2 | Observed |
 
 ## Safety
 
@@ -50,6 +32,7 @@ For persistent work, back up the destination and use a sacrificial P bank slot d
 - [Stored presets and `.prst` structure](#stored-presets-and-prst-structure)
 - [Known limits](#known-limits)
 - [Contributing findings](#contributing-findings)
+- [AI assistance](#ai-assistance)
 - [License](#license)
 
 ## Labels
@@ -515,6 +498,10 @@ Proposed findings should include:
 Names recovered through static inspection may guide testing but are not hardware confirmation. A successful send is not proof of state, and an acknowledgement is not proof of persistence. Conclusions must remain narrower than or equal to the demonstrated evidence.
 
 Do not publish vendor applications, APKs, firmware, installers, manuals, decompiled source, proprietary creative assets, complete factory-preset datasets, factory IR files, credentials, personal identifiers, or access-control material. Preserve original captures privately and publish only minimized evidence necessary to reproduce an owner-controlled interoperability claim.
+
+## AI assistance
+
+AI tools assisted with drafting, editing, and analysis. The author directed the work and validated technical claims against documented observations and hardware tests.
 
 ## License
 
